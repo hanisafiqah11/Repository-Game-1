@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lexicon Blade: Dojo Sinonim & Antonim</title>
+    
+    <!-- Tailwind CSS untuk susun atur responsif -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts: Cinzel (gaya dojo epik) & Inter (kebolehbacaan jelas) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Tone.js untuk kesan bunyi pedang, kombo dan letupan tanpa fail luar -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <!-- Google MediaPipe Hands & Camera Utils CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #090d16;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        .font-dojo {
+            font-family: 'Cinzel', serif;
+        }
+        /* Kesan cermin pada paparan kamera supaya pergerakan tangan semula jadi */
+        .mirror-canvas {
+            transform: scaleX(-1);
+        }
+        /* Animasi denyutan neon untuk kata kunci sasaran */
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.4), inset 0 0 12px rgba(245, 158, 11, 0.2); }
+            50% { box-shadow: 0 0 35px rgba(245, 158, 11, 0.75), inset 0 0 20px rgba(245, 158, 11, 0.4); }
+        }
+        .target-banner {
+            animation: pulseGlow 2.2s infinite ease-in-out;
+        }
+        /* Skrol tersuai untuk senarai semakan kosa kata */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(245, 158, 11, 0.5);
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body class="w-screen h-screen relative text-slate-100">
+
+    <!-- Elemen Video Tersembunyi untuk suapan mentah MediaPipe -->
+    <video id="webcamVideo" class="hidden" playsinline autoplay muted></video>
+
+    <!-- Kanvas Utama Permainan (Merangkumi suapan kamera + objek + bilah laser) -->
+    <canvas id="gameCanvas" class="w-full h-full block"></canvas>
+
+    <!-- Lapisan HUD Atas (Skor, Kata Kunci Sasaran, Pemasa 60s) -->
+    <div id="gameHud" class="hidden fixed inset-x-0 top-0 p-3 sm:p-5 pointer-events-none z-20 flex flex-col items-center gap-3">
+        <div class="w-full max-w-6xl flex items-center justify-between gap-2">
+            
+            <!-- Kotak Skor & Kombo -->
+            <div class="bg-slate-900/80 backdrop-blur-md border border-amber-500/40 rounded-2xl px-4 py-2 sm:px-6 sm:py-3 shadow-xl flex items-center gap-4">
+                <div>
+                    <p class="text-[10px] sm:text-xs uppercase tracking-widest text-amber-400/80 font-bold">Markah Dojo</p>
+                    <p id="scoreDisplay" class="text-2xl sm:text-4xl font-black text-white leading-none">0</p>
+                </div>
+                <div id="comboBadge" class="hidden bg-gradient-to-r from-rose-600 to-amber-500 px-3 py-1 rounded-xl text-xs sm:text-sm font-black uppercase tracking-wider shadow-lg animate-bounce">
+                    x2 KOMBO!
+                </div>
+            </div>
+
+            <!-- Papan Kata Kunci Sasaran (Tengah) -->
+            <div class="target-banner bg-slate-950/90 backdrop-blur-xl border-2 border-amber-400 rounded-2xl px-4 py-2 sm:px-8 sm:py-3 text-center max-w-md sm:max-w-xl shadow-2xl">
+                <div class="flex items-center justify-center gap-2 mb-0.5">
+                    <span id="modeBadge" class="px-2.5 py-0.5 rounded-full text-[10px] sm:text-xs font-extrabold uppercase tracking-widest bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                        SYNONYM (SEERTI)
+                    </span>
+                </div>
+                <h2 id="targetWordDisplay" class="font-dojo text-2xl sm:text-4xl md:text-5xl font-black text-amber-300 tracking-wider uppercase drop-shadow">
+                    BRAVE
+                </h2>
+                <p id="targetHintDisplay" class="text-[11px] sm:text-xs text-slate-300 mt-0.5 font-medium">
+                    Libas perkataan yang sama maksud!
+                </p>
+            </div>
+
+            <!-- Kotak Pemasa Undur 60 Saat & Butang Henti -->
+            <div class="bg-slate-900/80 backdrop-blur-md border border-cyan-500/40 rounded-2xl px-4 py-2 sm:px-6 sm:py-3 shadow-xl flex items-center gap-3 pointer-events-auto">
+                <div class="text-right">
+                    <p class="text-[10px] sm:text-xs uppercase tracking-widest text-cyan-400/80 font-bold">Masa</p>
+                    <p id="timerDisplay" class="text-2xl sm:text-4xl font-black text-cyan-300 leading-none">60s</p>
+                </div>
+                <button id="quitBtn" title="Tamatkan Sesi" class="p-2.5 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Bar Kemajuan Kata Kunci Semasa -->
+        <div class="w-full max-w-md bg-slate-900/70 rounded-full h-2 p-0.5 border border-slate-700/80 overflow-hidden">
+            <div id="wordProgressBar" class="bg-gradient-to-r from-amber-400 to-rose-500 h-full rounded-full transition-all duration-300" style="width: 100%"></div>
+        </div>
+    </div>
+
+    <!-- Status Penjejakan Tangan di Bucu Bawah -->
+    <div id="trackingStatusPill" class="fixed bottom-4 left-4 z-20 bg-slate-900/80 backdrop-blur-md border border-slate-700/80 rounded-full px-4 py-1.5 flex items-center gap-2 text-xs font-semibold text-slate-300 shadow-lg">
+        <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
+        <span id="statusText">Menyediakan sensor dojo...</span>
+    </div>
+
+    <!-- SKRIN MENU MULA -->
+    <div id="startScreen" class="fixed inset-0 z-30 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md">
+        <div class="w-full max-w-2xl bg-gradient-to-b from-slate-900/95 to-slate-950/95 border-2 border-amber-500/40 rounded-3xl p-6 sm:p-10 shadow-2xl text-center relative overflow-hidden">
+            
+            <!-- Hiasan Latar Belakang Dojo -->
+            <div class="absolute -top-24 -right-24 w-56 h-56 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div class="absolute -bottom-24 -left-24 w-56 h-56 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-bold uppercase tracking-widest mb-4">
+                <span>⚔️</span> Bahasa Inggeris • Tahap 2 (Tahun 4 - 6)
+            </div>
+
+            <h1 class="font-dojo text-4xl sm:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-amber-400 to-rose-400 tracking-wide mb-3">
+                LEXICON BLADE
+            </h1>
+            <p class="text-slate-300 text-sm sm:text-base max-w-lg mx-auto mb-6 leading-relaxed">
+                Gunakan <strong class="text-cyan-300">jari telunjuk</strong> anda di hadapan kamera sebagai bilah cahaya! Libas tanglung perkataan <strong class="text-emerald-300">Sinonim (Seerti)</strong> atau <strong class="text-rose-300">Antonim (Berlawanan)</strong> yang tepat dan elakkan bom!
+            </p>
+
+            <!-- Pilihan Mod Latihan -->
+            <div class="grid grid-cols-3 gap-2 sm:gap-3 max-w-lg mx-auto mb-6">
+                <button type="button" data-mode="MIXED" class="mode-btn active-mode bg-amber-500/20 border-2 border-amber-400 text-amber-200 rounded-2xl p-3 text-center transition cursor-pointer">
+                    <div class="text-lg sm:text-xl mb-1">⚡</div>
+                    <div class="text-xs sm:text-sm font-extrabold">CAMPURAN</div>
+                    <div class="text-[10px] text-amber-300/80">Sinonim & Antonim</div>
+                </button>
+                <button type="button" data-mode="SYNONYM" class="mode-btn bg-slate-800/70 border border-slate-700 text-slate-300 hover:border-emerald-400/60 rounded-2xl p-3 text-center transition cursor-pointer">
+                    <div class="text-lg sm:text-xl mb-1">🟢</div>
+                    <div class="text-xs sm:text-sm font-extrabold">SYNONYMS</div>
+                    <div class="text-[10px] text-slate-400">Perkataan Seerti</div>
+                </button>
+                <button type="button" data-mode="ANTONYM" class="mode-btn bg-slate-800/70 border border-slate-700 text-slate-300 hover:border-rose-400/60 rounded-2xl p-3 text-center transition cursor-pointer">
+                    <div class="text-lg sm:text-xl mb-1">🔴</div>
+                    <div class="text-xs sm:text-sm font-extrabold">ANTONYMS</div>
+                    <div class="text-[10px] text-slate-400">Berlawan Maksud</div>
+                </button>
+            </div>
+
+            <!-- Pilihan Warna Bilah Cahaya -->
+            <div class="flex items-center justify-center gap-3 mb-7">
+                <span class="text-xs uppercase tracking-wider text-slate-400 font-bold">Warna Bilah:</span>
+                <button type="button" data-color="#22d3ee" class="blade-color-btn w-8 h-8 rounded-full bg-cyan-400 ring-4 ring-white scale-110 transition cursor-pointer" title="Bilah Kilat Biru"></button>
+                <button type="button" data-color="#f43f5e" class="blade-color-btn w-8 h-8 rounded-full bg-rose-500 opacity-75 hover:opacity-100 transition cursor-pointer" title="Bilah Naga Merah"></button>
+                <button type="button" data-color="#a855f7" class="blade-color-btn w-8 h-8 rounded-full bg-purple-500 opacity-75 hover:opacity-100 transition cursor-pointer" title="Bilah Bayang Ungu"></button>
+                <button type="button" data-color="#10b981" class="blade-color-btn w-8 h-8 rounded-full bg-emerald-400 opacity-75 hover:opacity-100 transition cursor-pointer" title="Bilah Jed Hijau"></button>
+            </div>
+
+            <!-- Panduan Ringkas -->
+            <div class="grid grid-cols-3 gap-2 text-left bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5 mb-7 text-xs">
+                <div class="flex items-start gap-2">
+                    <span class="text-base">☝️</span>
+                    <span class="text-slate-300">Angkat <strong>1 jari telunjuk</strong> & gerakkan pantas untuk melibas.</span>
+                </div>
+                <div class="flex items-start gap-2">
+                    <span class="text-base">🔥</span>
+                    <span class="text-slate-300">Libas berturut-turut untuk <strong>Kombo Berganda</strong>!</span>
+                </div>
+                <div class="flex items-start gap-2">
+                    <span class="text-base">💣</span>
+                    <span class="text-slate-300">Elak <strong>Bom Berduri</strong> (-15 markah & hilang kombo).</span>
+                </div>
+            </div>
+
+            <!-- Butang Mula & Kawalan -->
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button id="startBtn" class="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-slate-950 font-black text-base sm:text-lg tracking-wider uppercase shadow-lg shadow-amber-500/30 transform hover:scale-105 active:scale-95 transition cursor-pointer">
+                    Mulakan Latihan Dojo (60s)
+                </button>
+            </div>
+            <p id="cameraNotice" class="text-[11px] text-slate-400 mt-3">
+                * Memerlukan akses kamera web. Mod tetikus/sentuhan juga disokong secara automatik sebagai sandaran.
+            </p>
+        </div>
+    </div>
+
+    <!-- SKRIN TAMAT & SEMAKAN KOSA KATA -->
+    <div id="endScreen" class="hidden fixed inset-0 z-30 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-lg">
+        <div class="w-full max-w-3xl max-h-[92vh] flex flex-col bg-slate-900 border-2 border-amber-500/40 rounded-3xl p-5 sm:p-8 shadow-2xl">
+            
+            <!-- Kepala Keputusan -->
+            <div class="text-center border-b border-slate-800 pb-4 mb-4">
+                <span class="inline-block px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-widest mb-1">
+                    Masa Tamat • Laporan Dojo
+                </span>
+                <h2 id="rankTitle" class="font-dojo text-3xl sm:text-4xl font-black text-white">
+                    MASTER SAMURAI KOSA KATA
+                </h2>
+                
+                <!-- Statistik Ringkas -->
+                <div class="grid grid-cols-3 gap-3 mt-4 max-w-lg mx-auto">
+                    <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-3">
+                        <p class="text-[10px] uppercase text-slate-400 font-bold">Jumlah Skor</p>
+                        <p id="finalScore" class="text-2xl sm:text-3xl font-black text-amber-400">0</p>
+                    </div>
+                    <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-3">
+                        <p class="text-[10px] uppercase text-slate-400 font-bold">Kombo Tertinggi</p>
+                        <p id="finalMaxCombo" class="text-2xl sm:text-3xl font-black text-cyan-400">x1</p>
+                    </div>
+                    <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-3">
+                        <p class="text-[10px] uppercase text-slate-400 font-bold">Ketepatan</p>
+                        <p id="finalAccuracy" class="text-2xl sm:text-3xl font-black text-emerald-400">0%</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Senarai Semakan Kosa Kata -->
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm sm:text-base font-extrabold text-slate-200 flex items-center gap-2">
+                    <span>📜</span> Semakan Kosa Kata Sesi Ini
+                </h3>
+                <span class="text-xs text-slate-400">Rujukan Ulang Kaji Tahap 2</span>
+            </div>
+
+            <div id="vocabReviewList" class="flex-1 overflow-y-auto space-y-2.5 pr-1 mb-5">
+                <!-- Item semakan dijana secara dinamik di sini -->
+            </div>
+
+            <!-- Butang Main Semula -->
+            <div class="flex flex-col sm:flex-row gap-3 justify-center pt-2 border-t border-slate-800">
+                <button id="playAgainBtn" class="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-slate-950 font-black uppercase tracking-wider shadow-lg transition transform hover:scale-105 cursor-pointer">
+                    ⚔️ Berlatih Semula
+                </button>
+                <button id="backToMenuBtn" class="px-6 py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold uppercase tracking-wider transition cursor-pointer">
+                    Menu Utama
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ============================================================================
+         * 1. BANK KOSA KATA BAHASA INGGERIS TAHAP 2 (TAHUN 4, 5 & 6)
+         * Merangkumi kata kunci, makna Bahasa Melayu, senarai sinonim, antonim & pengganggu
+         * ============================================================================
+         */
+        const VOCAB_BANK = [
+            {
+                word: "BRAVE",
+                meaning: "Berani",
+                synonyms: ["COURAGEOUS", "FEARLESS", "BOLD", "HEROIC"],
+                antonyms: ["COWARDLY", "AFRAID", "TIMID", "FEARFUL"],
+                distractors: ["HUNGRY", "SLEEPY", "FRAGILE", "SILENT"]
+            },
+            {
+                word: "ANCIENT",
+                meaning: "Purba / Sangat Lama",
+                synonyms: ["OLD", "ANTIQUE", "HISTORIC", "AGED"],
+                antonyms: ["MODERN", "NEW", "RECENT", "YOUNG"],
+                distractors: ["BRIGHT", "SHALLOW", "HEAVY", "NOISY"]
+            },
+            {
+                word: "GENEROUS",
+                meaning: "Pemurah / Baik Hati",
+                synonyms: ["KIND", "GIVING", "CHARITABLE", "UNSELFISH"],
+                antonyms: ["GREEDY", "SELFISH", "STINGY", "MEAN"],
+                distractors: ["DIZZY", "FROZEN", "SMOOTH", "RAPID"]
+            },
+            {
+                word: "ENORMOUS",
+                meaning: "Sangat Besar / Raksasa",
+                synonyms: ["HUGE", "GIANT", "MASSIVE", "IMMENSE"],
+                antonyms: ["TINY", "SMALL", "MINIATURE", "LITTLE"],
+                distractors: ["BITTER", "POLITE", "CLOUDY", "LAZY"]
+            },
+            {
+                word: "DILIGENT",
+                meaning: "Rajin / Tekun",
+                synonyms: ["HARDWORKING", "DEDICATED", "ACTIVE", "ATTENTIVE"],
+                antonyms: ["LAZY", "IDLE", "CARELESS", "SLUGGISH"],
+                distractors: ["SOUR", "DAMP", "HOLLOW", "ROUND"]
+            },
+            {
+                word: "FRAGILE",
+                meaning: "Mudah Pecah / Rapuh",
+                synonyms: ["DELICATE", "BREAKABLE", "WEAK", "FRAIL"],
+                antonyms: ["STRONG", "STURDY", "TOUGH", "DURABLE"],
+                distractors: ["CLEVER", "HUNGRY", "EARLY", "SWEET"]
+            },
+            {
+                word: "VICTORY",
+                meaning: "Kemenangan",
+                synonyms: ["TRIUMPH", "WIN", "SUCCESS", "CONQUEST"],
+                antonyms: ["DEFEAT", "LOSS", "FAILURE", "SURRENDER"],
+                distractors: ["JOURNEY", "WEATHER", "BASKET", "FOREST"]
+            },
+            {
+                word: "TRANSPARENT",
+                meaning: "Lutsinar / Jelas",
+                synonyms: ["CLEAR", "SEE-THROUGH", "CRYSTAL", "LUCID"],
+                antonyms: ["OPAQUE", "CLOUDY", "MURKY", "BLURRY"],
+                distractors: ["ANGRY", "SPICY", "WEALTHY", "NARROW"]
+            },
+            {
+                word: "ABUNDANT",
+                meaning: "Melimpah-ruah / Banyak",
+                synonyms: ["PLENTIFUL", "AMPLED", "NUMEROUS", "RICH"],
+                antonyms: ["SCARCE", "RARE", "INSUFFICIENT", "LACKING"],
+                distractors: ["GENTLE", "SQUARE", "FAMOUS", "TIDY"]
+            },
+            {
+                word: "CAUTIOUS",
+                meaning: "Berhati-hati / Waspada",
+                synonyms: ["CAREFUL", "ALERT", "WATCHFUL", "PRUDENT"],
+                antonyms: ["RECKLESS", "CARELESS", "HASTY", "RASH"],
+                distractors: ["THIRSTY", "MELTED", "CROOKED", "SILKY"]
+            },
+            {
+                word: "CHEERFUL",
+                meaning: "Ceria / Gembira",
+                synonyms: ["JOYFUL", "HAPPY", "MERRY", "LIVELY"],
+                antonyms: ["GLOOMY", "SAD", "MISERABLE", "SORROWFUL"],
+                distractors: ["SHARP", "WOODEN", "DAMP", "STEEP"]
+            },
+            {
+                word: "EXPAND",
+                meaning: "Mengembang / Meluas",
+                synonyms: ["GROW", "ENLARGE", "STRETCH", "WIDEN"],
+                antonyms: ["SHRINK", "CONTRACT", "REDUCE", "DECREASE"],
+                distractors: ["WHISPER", "FLOAT", "BORROW", "FREEZE"]
+            }
+        ];
+
+        /**
+         * ============================================================================
+         * 2. ENJIN AUDIO SINTESIS (TONE.JS) - BUNYI LIBASAN, KOMBO & LETUPAN
+         * ============================================================================
+         */
+        class DojoAudio {
+            constructor() {
+                this.initialized = false;
+                this.lastSlashTime = 0;
+            }
+
+            async init() {
+                if (this.initialized) return;
+                try {
+                    await Tone.start();
+                    // Penapis & hingar putih untuk kesan hayunan pedang angin (whoosh)
+                    this.slashFilter = new Tone.Filter(1200, "bandpass").toDestination();
+                    this.slashNoise = new Tone.NoiseSynth({
+                        noise: { type: "white" },
+                        envelope: { attack: 0.01, decay: 0.14, sustain: 0, release: 0.05 }
+                    }).connect(this.slashFilter);
+
+                    // Sintesis loceng/bilah tepat untuk jawapan betul
+                    this.hitSynth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "triangle" },
+                        envelope: { attack: 0.01, decay: 0.25, sustain: 0.05, release: 0.4 }
+                    }).toDestination();
+                    this.hitSynth.volume.value = -4;
+
+                    // Sintesis bunyi salah (low buzz)
+                    this.wrongSynth = new Tone.MembraneSynth({
+                        pitchDecay: 0.08,
+                        octaves: 2,
+                        envelope: { attack: 0.01, decay: 0.3, sustain: 0 }
+                    }).toDestination();
+
+                    // Sintesis letupan bom
+                    this.bombNoise = new Tone.NoiseSynth({
+                        noise: { type: "brown" },
+                        envelope: { attack: 0.01, decay: 0.55, sustain: 0, release: 0.2 }
+                    }).toDestination();
+                    this.bombNoise.volume.value = 2;
+
+                    this.initialized = true;
+                } catch (err) {
+                    console.warn("Audio tidak dapat dimulakan:", err);
+                }
+            }
+
+            playSlash(speed = 20) {
+                if (!this.initialized) return;
+                const now = performance.now();
+                if (now - this.lastSlashTime < 140) return; // Elak bertindih terlalu rapat
+                this.lastSlashTime = now;
+
+                const freq = Math.min(2800, Math.max(700, speed * 45));
+                this.slashFilter.frequency.setValueAtTime(freq, Tone.now());
+                this.slashNoise.triggerAttackRelease("16n");
+            }
+
+            playCorrect(combo = 1) {
+                if (!this.initialized) return;
+                // Pic meningkat mengikut gandaan kombo
+                const scale = ["C5", "D5", "E5", "G5", "A5", "C6", "D6", "E6"];
+                const note = scale[Math.min(combo - 1, scale.length - 1)];
+                this.hitSynth.triggerAttackRelease([note, "G5"], "8n");
+            }
+
+            playWrong() {
+                if (!this.initialized) return;
+                this.wrongSynth.triggerAttackRelease("G1", "8n");
+            }
+
+            playBomb() {
+                if (!this.initialized) return;
+                this.bombNoise.triggerAttackRelease("4n");
+                this.wrongSynth.triggerAttackRelease("C1", "4n");
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 3. PEMBOLEHUBAH KEADAAN PERMAINAN & ELEMEN DOM
+         * ============================================================================
+         */
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const videoEl = document.getElementById("webcamVideo");
+
+        const audio = new DojoAudio();
+
+        const state = {
+            screen: "START", // START, PLAYING, END
+            selectedMode: "MIXED", // MIXED, SYNONYM, ANTONYM
+            bladeColor: "#22d3ee",
+            score: 0,
+            combo: 0,
+            maxCombo: 0,
+            lastHitTimestamp: 0,
+            totalSlices: 0,
+            correctSlices: 0,
+            timeLeft: 60,
+            timerInterval: null,
+
+            // Kata kunci semasa
+            currentVocab: null,
+            currentRelation: "SYNONYM", // SYNONYM atau ANTONYM
+            targetHitsOnCurrentWord: 0,
+            wordSwitchTimer: 0,
+            sessionHistory: [], // Rekod untuk semakan akhir
+
+            // Entiti kanvas
+            targets: [],       // Tanglung perkataan & bom yang melambung
+            slicedHalves: [],  // Belahan objek yang jatuh
+            particles: [],     // Percikan cahaya apabila terbelah
+            floatingTexts: [], // Teks markah terapung (+10, x3 COMBO!, SALAH!)
+            bladeTrail: [],    // Titik koordinat jejak bilah cahaya
+            screenShake: 0,
+
+            // Penjejakan tangan / penunjuk
+            cameraActive: false,
+            handDetected: false,
+            pointer: { x: -500, y: -500, prevX: -500, prevY: -500, active: false, speed: 0 },
+            spawnCooldown: 0
+        };
+
+        /**
+         * ============================================================================
+         * 4. PENGURUSAN SAIZ KANVAS RESPONSIF
+         * ============================================================================
+         */
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener("resize", resizeCanvas);
+        resizeCanvas();
+
+        /**
+         * ============================================================================
+         * 5. INTEGRASI GOOGLE MEDIAPIPE HANDS (PENJEJAKAN JARI TELUNJUK)
+         * ============================================================================
+         */
+        let handsDetector = null;
+        let cameraInstance = null;
+
+        function updateStatusPill(colorClass, text, ping = false) {
+            const dot = document.getElementById("statusDot");
+            const label = document.getElementById("statusText");
+            dot.className = `w-2.5 h-2.5 rounded-full ${colorClass} ${ping ? "animate-ping" : ""}`;
+            label.textContent = text;
+        }
+
+        async function setupMediaPipe() {
+            try {
+                if (typeof Hands === "undefined") {
+                    throw new Error("Pustaka MediaPipe gagal dimuatkan.");
+                }
+
+                handsDetector = new Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
+
+                handsDetector.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.65,
+                    minTrackingConfidence: 0.6
+                });
+
+                handsDetector.onResults(onHandResults);
+
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    cameraInstance = new Camera(videoEl, {
+                        onFrame: async () => {
+                            if (handsDetector) {
+                                await handsDetector.send({ image: videoEl });
+                            }
+                        },
+                        width: 1280,
+                        height: 720
+                    });
+                    await cameraInstance.start();
+                    state.cameraActive = true;
+                    updateStatusPill("bg-emerald-400", "Kamera Aktif • Angkat jari telunjuk anda", false);
+                } else {
+                    throw new Error("Kamera tidak disokong pada pelayar ini.");
+                }
+            } catch (err) {
+                console.warn("Sandaran tetikus/sentuhan diaktifkan:", err);
+                state.cameraActive = false;
+                updateStatusPill("bg-cyan-400", "Mod Sandaran Tetikus / Sentuhan Aktif", false);
+            }
+        }
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                // Mercu tanda 8 ialah hujung jari telunjuk (INDEX_FINGER_TIP)
+                const indexTip = landmarks[8];
+
+                // Cerminkan paksi-X (1 - x) supaya selari dengan paparan kamera cermin
+                const screenX = (1 - indexTip.x) * canvas.width;
+                const screenY = indexTip.y * canvas.height;
+
+                updatePointerPosition(screenX, screenY, true);
+
+                if (!state.handDetected) {
+                    state.handDetected = true;
+                    updateStatusPill("bg-emerald-400", "Bilah Jari Telunjuk Dikesan!", false);
+                }
+            } else {
+                if (state.handDetected) {
+                    state.handDetected = false;
+                    state.pointer.active = false;
+                    updateStatusPill("bg-amber-400", "Halakan tangan ke kamera...", true);
+                }
+            }
+        }
+
+        // Sokongan Tetikus & Skrin Sentuh sebagai sandaran lancar jika tiada kamera
+        function handleManualMove(clientX, clientY) {
+            if (!state.handDetected) {
+                updatePointerPosition(clientX, clientY, true);
+            }
+        }
+
+        window.addEventListener("mousemove", (e) => handleManualMove(e.clientX, e.clientY));
+        window.addEventListener("touchmove", (e) => {
+            if (e.touches.length > 0) {
+                handleManualMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+        window.addEventListener("touchend", () => {
+            if (!state.handDetected) state.pointer.active = false;
+        });
+
+        function updatePointerPosition(x, y, isActive) {
+            const dx = x - state.pointer.x;
+            const dy = y - state.pointer.y;
+            const dist = Math.hypot(dx, dy);
+
+            state.pointer.prevX = state.pointer.active ? state.pointer.x : x;
+            state.pointer.prevY = state.pointer.active ? state.pointer.y : y;
+            state.pointer.x = x;
+            state.pointer.y = y;
+            state.pointer.speed = dist;
+            state.pointer.active = isActive;
+
+            if (isActive) {
+                state.bladeTrail.push({
+                    x,
+                    y,
+                    life: 1.0,
+                    speed: dist
+                });
+
+                // Bunyi libasan pedang apabila pergerakan pantas dikesan
+                if (dist > 28 && state.screen === "PLAYING") {
+                    audio.playSlash(dist);
+                }
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 6. LOGIK KOSA KATA, SASARAN & PENJANAAN OBJEK TERAPUNG
+         * ============================================================================
+         */
+        function pickNextTargetWord() {
+            // Pilih kata kunci baharu yang berbeza daripada sebelumnya
+            let candidates = VOCAB_BANK.filter(v => !state.currentVocab || v.word !== state.currentVocab.word);
+            const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+            state.currentVocab = chosen;
+
+            // Tentukan sama ada pusingan ini mencari SINONIM atau ANTONIM
+            if (state.selectedMode === "SYNONYM") {
+                state.currentRelation = "SYNONYM";
+            } else if (state.selectedMode === "ANTONYM") {
+                state.currentRelation = "ANTONYM";
+            } else {
+                state.currentRelation = Math.random() < 0.5 ? "SYNONYM" : "ANTONYM";
+            }
+
+            state.targetHitsOnCurrentWord = 0;
+            state.wordSwitchTimer = 14; // Tukar kata kunci secara automatik setiap 14 saat jika belum lengkap
+
+            // Rekod dalam sejarah sesi untuk paparan semakan akhir
+            const existingEntry = state.sessionHistory.find(
+                item => item.word === chosen.word && item.relation === state.currentRelation
+            );
+            if (!existingEntry) {
+                state.sessionHistory.push({
+                    word: chosen.word,
+                    meaning: chosen.meaning,
+                    relation: state.currentRelation,
+                    correctList: state.currentRelation === "SYNONYM" ? chosen.synonyms : chosen.antonyms,
+                    slicedCorrectly: []
+                });
+            }
+
+            updateTargetHud();
+        }
+
+        function updateTargetHud() {
+            const modeBadge = document.getElementById("modeBadge");
+            const wordDisplay = document.getElementById("targetWordDisplay");
+            const hintDisplay = document.getElementById("targetHintDisplay");
+
+            wordDisplay.textContent = state.currentVocab.word;
+
+            if (state.currentRelation === "SYNONYM") {
+                modeBadge.textContent = "SYNONYM (SEERTI)";
+                modeBadge.className = "px-3 py-0.5 rounded-full text-[10px] sm:text-xs font-extrabold uppercase tracking-widest bg-emerald-500/20 text-emerald-300 border border-emerald-400/50";
+                hintDisplay.textContent = `Maksud: "${state.currentVocab.meaning}" — Libas perkataan SEERTI!`;
+            } else {
+                modeBadge.textContent = "ANTONYM (BERLAWANAN)";
+                modeBadge.className = "px-3 py-0.5 rounded-full text-[10px] sm:text-xs font-extrabold uppercase tracking-widest bg-rose-500/20 text-rose-300 border border-rose-400/50";
+                hintDisplay.textContent = `Maksud: "${state.currentVocab.meaning}" — Libas perkataan BERLAWANAN!`;
+            }
+        }
+
+        function spawnWave() {
+            if (!state.currentVocab) return;
+
+            const vocab = state.currentVocab;
+            const correctPool = state.currentRelation === "SYNONYM" ? vocab.synonyms : vocab.antonyms;
+            const wrongPool = [
+                ...(state.currentRelation === "SYNONYM" ? vocab.antonyms : vocab.synonyms),
+                ...vocab.distractors
+            ];
+
+            // Pastikan setiap gelombang mempunyai sekurang-kurangnya 1 jawapan betul + 1-2 pengganggu/bom
+            const waveItems = [];
+
+            // 1. Tambah 1 atau 2 perkataan betul
+            const correctWord = correctPool[Math.floor(Math.random() * correctPool.length)];
+            waveItems.push({ type: "WORD", text: correctWord, isCorrect: true });
+
+            if (Math.random() < 0.35) {
+                const secondCorrect = correctPool[Math.floor(Math.random() * correctPool.length)];
+                if (secondCorrect !== correctWord) {
+                    waveItems.push({ type: "WORD", text: secondCorrect, isCorrect: true });
+                }
+            }
+
+            // 2. Tambah 1 perkataan salah (pengganggu)
+            const wrongWord = wrongPool[Math.floor(Math.random() * wrongPool.length)];
+            waveItems.push({ type: "WORD", text: wrongWord, isCorrect: false });
+
+            // 3. Peluang 45% untuk melambung Bom Berduri
+            if (Math.random() < 0.45) {
+                waveItems.push({ type: "BOMB", text: "BOMB", isCorrect: false });
+            }
+
+            // Lancarkan setiap item dari bahagian bawah skrin dengan lengkung parabola semula jadi
+            const marginX = Math.max(90, canvas.width * 0.14);
+            waveItems.forEach((item, idx) => {
+                const startX = marginX + Math.random() * (canvas.width - marginX * 2);
+                const startY = canvas.height + 60 + idx * 25;
+
+                // Arahkan halaju mendatar ke arah tengah skrin supaya tidak terkeluar sisi
+                const centerBias = (canvas.width / 2 - startX) * (0.45 + Math.random() * 0.4);
+                const vx = centerBias + (Math.random() - 0.5) * 110;
+
+                // Ketinggian lambungan disesuaikan dengan tinggi skrin
+                const targetPeakY = canvas.height * (0.24 + Math.random() * 0.22);
+                const gravity = 620;
+                const vy = -Math.sqrt(2 * gravity * (startY - targetPeakY));
+
+                // Warna tanglung dojo yang menarik (rawak antara emas, nilam, jed, ungu supaya pemain mesti membaca perkataan!)
+                const themes = [
+                    { bg: "#1e293b", border: "#38bdf8", glow: "rgba(56, 189, 248, 0.35)" },
+                    { bg: "#1e1b4b", border: "#a78bfa", glow: "rgba(167, 139, 250, 0.35)" },
+                    { bg: "#172554", border: "#fbbf24", glow: "rgba(251, 191, 36, 0.35)" },
+                    { bg: "#064e3b", border: "#34d399", glow: "rgba(52, 211, 153, 0.35)" }
+                ];
+                const theme = themes[Math.floor(Math.random() * themes.length)];
+
+                state.targets.push({
+                    id: Math.random(),
+                    type: item.type,
+                    text: item.text,
+                    isCorrect: item.isCorrect,
+                    x: startX,
+                    y: startY,
+                    vx,
+                    vy,
+                    gravity,
+                    radius: item.type === "BOMB" ? 44 : Math.max(54, Math.min(72, canvas.width * 0.065)),
+                    rotation: (Math.random() - 0.5) * 0.3,
+                    vRot: (Math.random() - 0.5) * 1.4,
+                    theme,
+                    sliced: false
+                });
+            });
+        }
+
+        /**
+         * ============================================================================
+         * 7. PENGESANAN PERLANGGARAN BILAH CAHAYA & KESAN PERCIKAN VISUAL
+         * ============================================================================
+         */
+        function lineCircleIntersect(x1, y1, x2, y2, cx, cy, r) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lenSq = dx * dx + dy * dy;
+            if (lenSq === 0) return Math.hypot(cx - x1, cy - y1) <= r;
+
+            let t = ((cx - x1) * dx + (cy - y1) * dy) / lenSq;
+            t = Math.max(0, Math.min(1, t));
+            const closestX = x1 + t * dx;
+            const closestY = y1 + t * dy;
+            return Math.hypot(cx - closestX, cy - closestY) <= r;
+        }
+
+        function createSliceExplosion(x, y, primaryColor, secondaryColor, count = 26) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 90 + Math.random() * 360;
+                state.particles.push({
+                    x,
+                    y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed - 60,
+                    size: 3 + Math.random() * 5,
+                    color: i % 2 === 0 ? primaryColor : secondaryColor,
+                    life: 1.0,
+                    decay: 1.4 + Math.random() * 0.9
+                });
+            }
+        }
+
+        function addFloatingText(x, y, text, color, scale = 1) {
+            state.floatingTexts.push({
+                x,
+                y,
+                text,
+                color,
+                scale,
+                life: 1.0
+            });
+        }
+
+        function handleTargetSliced(target, sliceAngle) {
+            target.sliced = true;
+            state.totalSlices++;
+
+            if (target.type === "BOMB") {
+                // Terkena Bom!
+                audio.playBomb();
+                state.combo = 0;
+                state.score = Math.max(0, state.score - 15);
+                state.screenShake = 18;
+                createSliceExplosion(target.x, target.y, "#ef4444", "#f97316", 42);
+                addFloatingText(target.x, target.y, "💥 BOM! -15", "#f87171", 1.3);
+                updateScoreHud();
+                return;
+            }
+
+            // Cipta dua belahan objek yang terpisah mengikut sudut libasan
+            const perpAngle = sliceAngle + Math.PI / 2;
+            const splitForce = 130;
+            [-1, 1].forEach(dir => {
+                state.slicedHalves.push({
+                    text: target.text,
+                    x: target.x + Math.cos(perpAngle) * dir * 10,
+                    y: target.y + Math.sin(perpAngle) * dir * 10,
+                    vx: target.vx + Math.cos(perpAngle) * dir * splitForce,
+                    vy: target.vy - 60,
+                    gravity: target.gravity,
+                    radius: target.radius,
+                    rotation: target.rotation,
+                    vRot: dir * 3.5,
+                    side: dir,
+                    isCorrect: target.isCorrect,
+                    life: 1.0
+                });
+            });
+
+            if (target.isCorrect) {
+                // Jawapan Betul!
+                state.correctSlices++;
+                const now = performance.now();
+                if (now - state.lastHitTimestamp < 3200) {
+                    state.combo++;
+                } else {
+                    state.combo = 1;
+                }
+                state.lastHitTimestamp = now;
+                if (state.combo > state.maxCombo) state.maxCombo = state.combo;
+
+                const pointsEarned = 10 * Math.min(state.combo, 5);
+                state.score += pointsEarned;
+
+                audio.playCorrect(state.combo);
+                createSliceExplosion(target.x, target.y, "#34d399", state.bladeColor, 30);
+
+                const label = state.combo > 1 ? `+${pointsEarned} (x${state.combo} KOMBO!)` : `+${pointsEarned} TEPAT!`;
+                addFloatingText(target.x, target.y - 15, label, "#34d399", state.combo > 1 ? 1.25 : 1.05);
+
+                // Rekod dalam semakan kosa kata
+                const historyItem = state.sessionHistory.find(
+                    h => h.word === state.currentVocab.word && h.relation === state.currentRelation
+                );
+                if (historyItem && !historyItem.slicedCorrectly.includes(target.text)) {
+                    historyItem.slicedCorrectly.push(target.text);
+                }
+
+                // Tukar kata kunci baharu selepas 2 perkataan betul berjaya dilibas
+                state.targetHitsOnCurrentWord++;
+                if (state.targetHitsOnCurrentWord >= 2) {
+                    pickNextTargetWord();
+                }
+            } else {
+                // Jawapan Salah!
+                audio.playWrong();
+                state.combo = 0;
+                state.score = Math.max(0, state.score - 5);
+                state.screenShake = 8;
+                createSliceExplosion(target.x, target.y, "#fb7185", "#94a3b8", 20);
+                addFloatingText(target.x, target.y - 15, "SALAH! -5", "#fb7185", 1.1);
+            }
+
+            updateScoreHud();
+        }
+
+        function updateScoreHud() {
+            document.getElementById("scoreDisplay").textContent = state.score;
+            const comboBadge = document.getElementById("comboBadge");
+            if (state.combo > 1) {
+                comboBadge.textContent = `x${state.combo} KOMBO!`;
+                comboBadge.classList.remove("hidden");
+            } else {
+                comboBadge.classList.add("hidden");
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 8. GELUNG ANIMASI & LUKISAN KANVAS (60 FPS)
+         * ============================================================================
+         */
+        let lastFrameTime = performance.now();
+
+        function gameLoop(now) {
+            const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+            lastFrameTime = now;
+
+            ctx.save();
+
+            // Kesan gegaran skrin jika terkena bom atau salah
+            if (state.screenShake > 0) {
+                const sx = (Math.random() - 0.5) * state.screenShake;
+                const sy = (Math.random() - 0.5) * state.screenShake;
+                ctx.translate(sx, sy);
+                state.screenShake *= 0.85;
+                if (state.screenShake < 0.5) state.screenShake = 0;
+            }
+
+            drawBackground();
+
+            if (state.screen === "PLAYING") {
+                updateGameplay(dt);
+            }
+
+            drawSlicedHalves(dt);
+            drawTargets(dt);
+            drawParticles(dt);
+            drawFloatingTexts(dt);
+            drawLaserBlade(dt);
+
+            ctx.restore();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function drawBackground() {
+            // 1. Lukis paparan webcam langsung (dicerminkan) sebagai latar dojo interaktif
+            if (state.cameraActive && videoEl.readyState >= 2) {
+                ctx.save();
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+
+                // Kekalkan nisbah aspek video supaya memenuhi skrin tanpa herotan
+                const vRatio = videoEl.videoWidth / videoEl.videoHeight;
+                const cRatio = canvas.width / canvas.height;
+                let drawW, drawH, offsetX, offsetY;
+
+                if (cRatio > vRatio) {
+                    drawW = canvas.width;
+                    drawH = canvas.width / vRatio;
+                    offsetX = 0;
+                    offsetY = (canvas.height - drawH) / 2;
+                } else {
+                    drawH = canvas.height;
+                    drawW = canvas.height * vRatio;
+                    offsetX = (canvas.width - drawW) / 2;
+                    offsetY = 0;
+                }
+
+                ctx.drawImage(videoEl, offsetX, offsetY, drawW, drawH);
+                ctx.restore();
+
+                // Lapisan gelap separa lutsinar supaya teks perkataan & bilah cahaya sangat jelas dibaca
+                const grad = ctx.createRadialGradient(
+                    canvas.width / 2, canvas.height / 2, canvas.width * 0.15,
+                    canvas.width / 2, canvas.height / 2, canvas.width * 0.75
+                );
+                grad.addColorStop(0, "rgba(9, 13, 22, 0.52)");
+                grad.addColorStop(1, "rgba(9, 13, 22, 0.84)");
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            } else {
+                // Latar belakang dojo moden jika kamera belum aktif
+                const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                bgGrad.addColorStop(0, "#090d16");
+                bgGrad.addColorStop(0.5, "#111827");
+                bgGrad.addColorStop(1, "#1e1b4b");
+                ctx.fillStyle = bgGrad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // Corak grid halus gaya dojo futuristik
+            ctx.strokeStyle = "rgba(251, 191, 36, 0.04)";
+            ctx.lineWidth = 1;
+            const gridSize = 64;
+            for (let x = 0; x < canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+        }
+
+        function updateGameplay(dt) {
+            // Pemasa pertukaran kata kunci automatik
+            state.wordSwitchTimer -= dt;
+            const progressPct = Math.max(0, (state.wordSwitchTimer / 14) * 100);
+            document.getElementById("wordProgressBar").style.width = `${progressPct}%`;
+
+            if (state.wordSwitchTimer <= 0) {
+                pickNextTargetWord();
+            }
+
+            // Penjanaan gelombang tanglung perkataan
+            state.spawnCooldown -= dt;
+            if (state.spawnCooldown <= 0 && state.targets.length < 2) {
+                spawnWave();
+                state.spawnCooldown = 2.4;
+            }
+
+            // Kemas kini pergerakan objek & semak perlanggaran dengan bilah jari
+            const isSlashing = state.pointer.active && state.pointer.speed > 7;
+            const sliceAngle = Math.atan2(
+                state.pointer.y - state.pointer.prevY,
+                state.pointer.x - state.pointer.prevX
+            );
+
+            for (let i = state.targets.length - 1; i >= 0; i--) {
+                const t = state.targets[i];
+                t.x += t.vx * dt;
+                t.y += t.vy * dt;
+                t.vy += t.gravity * dt;
+                t.rotation += t.vRot * dt;
+
+                // Semak sama ada bilah cahaya memotong objek ini
+                if (!t.sliced && isSlashing) {
+                    const hit = lineCircleIntersect(
+                        state.pointer.prevX, state.pointer.prevY,
+                        state.pointer.x, state.pointer.y,
+                        t.x, t.y, t.radius
+                    );
+                    if (hit) {
+                        handleTargetSliced(t, sliceAngle);
+                    }
+                }
+
+                // Buang objek jika sudah terbelah atau jatuh melepasi bahagian bawah skrin
+                if (t.sliced || (t.vy > 0 && t.y > canvas.height + 110)) {
+                    state.targets.splice(i, 1);
+                }
+            }
+        }
+
+        function drawTargets() {
+            state.targets.forEach(t => {
+                ctx.save();
+                ctx.translate(t.x, t.y);
+                ctx.rotate(t.rotation);
+
+                if (t.type === "BOMB") {
+                    // Lukis Bom Berduri Dojo
+                    ctx.shadowColor = "rgba(239, 68, 68, 0.7)";
+                    ctx.shadowBlur = 20;
+
+                    // Duri bom
+                    ctx.fillStyle = "#dc2626";
+                    for (let a = 0; a < 8; a++) {
+                        ctx.save();
+                        ctx.rotate((a * Math.PI) / 4);
+                        ctx.beginPath();
+                        ctx.moveTo(-8, -t.radius + 4);
+                        ctx.lineTo(0, -t.radius - 12);
+                        ctx.lineTo(8, -t.radius + 4);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.restore();
+                    }
+
+                    // Badan bom
+                    const bombGrad = ctx.createRadialGradient(-10, -10, 5, 0, 0, t.radius);
+                    bombGrad.addColorStop(0, "#475569");
+                    bombGrad.addColorStop(0.6, "#0f172a");
+                    bombGrad.addColorStop(1, "#020617");
+                    ctx.fillStyle = bombGrad;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.lineWidth = 3;
+                    ctx.strokeStyle = "#ef4444";
+                    ctx.stroke();
+
+                    // Ikon amaran tengkorak / bom
+                    ctx.shadowBlur = 0;
+                    ctx.font = "bold 28px Inter";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText("💣", 0, 2);
+                } else {
+                    // Lukis Tanglung Perkataan Bercahaya
+                    ctx.shadowColor = t.theme.glow;
+                    ctx.shadowBlur = 18;
+
+                    ctx.fillStyle = t.theme.bg;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Gelang dalaman gaya mohor dojo
+                    ctx.lineWidth = 3.5;
+                    ctx.strokeStyle = t.theme.border;
+                    ctx.stroke();
+
+                    ctx.lineWidth = 1;
+                    ctx.strokeStyle = "rgba(255,255,255,0.2)";
+                    ctx.beginPath();
+                    ctx.arc(0, 0, t.radius - 7, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Teks Perkataan Bahasa Inggeris
+                    ctx.shadowBlur = 0;
+                    ctx.fillStyle = "#ffffff";
+                    const fontSize = t.text.length > 9 ? 14 : t.text.length > 7 ? 16 : 19;
+                    ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(t.text, 0, 0);
+                }
+
+                ctx.restore();
+            });
+        }
+
+        function drawSlicedHalves(dt) {
+            for (let i = state.slicedHalves.length - 1; i >= 0; i--) {
+                const h = state.slicedHalves[i];
+                h.x += h.vx * dt;
+                h.y += h.vy * dt;
+                h.vy += h.gravity * dt;
+                h.rotation += h.vRot * dt;
+                h.life -= dt * 1.1;
+
+                if (h.life <= 0) {
+                    state.slicedHalves.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, h.life);
+                ctx.translate(h.x, h.y);
+                ctx.rotate(h.rotation);
+
+                // Potong separuh bulatan menggunakan clip
+                ctx.beginPath();
+                if (h.side === -1) {
+                    ctx.rect(-h.radius - 10, -h.radius - 10, h.radius + 10, (h.radius + 10) * 2);
+                } else {
+                    ctx.rect(0, -h.radius - 10, h.radius + 10, (h.radius + 10) * 2);
+                }
+                ctx.clip();
+
+                ctx.fillStyle = h.isCorrect ? "#065f46" : "#881337";
+                ctx.beginPath();
+                ctx.arc(0, 0, h.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = h.isCorrect ? "#34d399" : "#fb7185";
+                ctx.stroke();
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "800 16px Inter, sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(h.text, 0, 0);
+
+                ctx.restore();
+            }
+        }
+
+        function drawParticles(dt) {
+            for (let i = state.particles.length - 1; i >= 0; i--) {
+                const p = state.particles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.vy += 280 * dt;
+                p.life -= p.decay * dt;
+
+                if (p.life <= 0) {
+                    state.particles.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.shadowColor = p.color;
+                ctx.shadowBlur = 10;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        function drawFloatingTexts(dt) {
+            for (let i = state.floatingTexts.length - 1; i >= 0; i--) {
+                const ft = state.floatingTexts[i];
+                ft.y -= 65 * dt;
+                ft.life -= dt * 1.15;
+
+                if (ft.life <= 0) {
+                    state.floatingTexts.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                ctx.globalAlpha = Math.min(1, ft.life * 1.4);
+                ctx.font = `900 ${Math.round(22 * ft.scale)}px Inter, sans-serif`;
+                ctx.textAlign = "center";
+                ctx.fillStyle = "#090d16";
+                ctx.fillText(ft.text, ft.x + 2, ft.y + 2);
+                ctx.fillStyle = ft.color;
+                ctx.fillText(ft.text, ft.x, ft.y);
+                ctx.restore();
+            }
+        }
+
+        function drawLaserBlade(dt) {
+            // Pudarkan titik jejak bilah secara beransur-ansur
+            for (let i = state.bladeTrail.length - 1; i >= 0; i--) {
+                state.bladeTrail[i].life -= dt * 5.5;
+                if (state.bladeTrail[i].life <= 0) {
+                    state.bladeTrail.splice(i, 1);
+                }
+            }
+
+            if (state.bladeTrail.length > 1) {
+                ctx.save();
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+
+                for (let i = 1; i < state.bladeTrail.length; i++) {
+                    const p1 = state.bladeTrail[i - 1];
+                    const p2 = state.bladeTrail[i];
+                    const alpha = Math.max(0, p2.life);
+
+                    // Aura cahaya luar berwarna
+                    ctx.strokeStyle = state.bladeColor;
+                    ctx.shadowColor = state.bladeColor;
+                    ctx.shadowBlur = 22;
+                    ctx.globalAlpha = alpha * 0.85;
+                    ctx.lineWidth = 16 * alpha;
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+
+                    // Teras bilah putih terang di tengah
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.shadowBlur = 8;
+                    ctx.globalAlpha = alpha;
+                    ctx.lineWidth = 6 * alpha;
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            // Lukis titik fokus cahaya pada hujung jari telunjuk semasa
+            if (state.pointer.active) {
+                ctx.save();
+                ctx.fillStyle = "#ffffff";
+                ctx.shadowColor = state.bladeColor;
+                ctx.shadowBlur = 25;
+                ctx.beginPath();
+                ctx.arc(state.pointer.x, state.pointer.y, 9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 9. KAWALAN ALIRAN SESI (MULA, PEMASA 60 SAAT & SEMAKAN AKHIR)
+         * ============================================================================
+         */
+        async function startGame() {
+            await audio.init();
+
+            state.screen = "PLAYING";
+            state.score = 0;
+            state.combo = 0;
+            state.maxCombo = 0;
+            state.totalSlices = 0;
+            state.correctSlices = 0;
+            state.timeLeft = 60;
+            state.targets = [];
+            state.slicedHalves = [];
+            state.particles = [];
+            state.floatingTexts = [];
+            state.sessionHistory = [];
+            state.spawnCooldown = 0.5;
+
+            updateScoreHud();
+            document.getElementById("timerDisplay").textContent = "60s";
+            document.getElementById("startScreen").classList.add("hidden");
+            document.getElementById("endScreen").classList.add("hidden");
+            document.getElementById("gameHud").classList.remove("hidden");
+
+            pickNextTargetWord();
+
+            if (state.timerInterval) clearInterval(state.timerInterval);
+            state.timerInterval = setInterval(() => {
+                state.timeLeft--;
+                const timerEl = document.getElementById("timerDisplay");
+                timerEl.textContent = `${state.timeLeft}s`;
+
+                if (state.timeLeft <= 10) {
+                    timerEl.classList.remove("text-cyan-300");
+                    timerEl.classList.add("text-rose-400", "animate-pulse");
+                } else {
+                    timerEl.classList.add("text-cyan-300");
+                    timerEl.classList.remove("text-rose-400", "animate-pulse");
+                }
+
+                if (state.timeLeft <= 0) {
+                    endGame();
+                }
+            }, 1000);
+        }
+
+        function endGame() {
+            clearInterval(state.timerInterval);
+            state.screen = "END";
+            state.targets = [];
+
+            document.getElementById("gameHud").classList.add("hidden");
+            document.getElementById("endScreen").classList.remove("hidden");
+
+            // Kira statistik akhir & pangkat dojo
+            const accuracy = state.totalSlices > 0
+                ? Math.round((state.correctSlices / state.totalSlices) * 100)
+                : 0;
+
+            document.getElementById("finalScore").textContent = state.score;
+            document.getElementById("finalMaxCombo").textContent = `x${Math.max(1, state.maxCombo)}`;
+            document.getElementById("finalAccuracy").textContent = `${accuracy}%`;
+
+            const rankEl = document.getElementById("rankTitle");
+            if (state.score >= 220) {
+                rankEl.textContent = "👑 GRANDMASTER SHOGUN KOSA KATA";
+            } else if (state.score >= 120) {
+                rankEl.textContent = "⚔️ PENDEKAR SAMURAI ELIT";
+            } else if (state.score >= 50) {
+                rankEl.textContent = "🥋 PERANTIS DOJO BERBAKAT";
+            } else {
+                rankEl.textContent = "🌱 PELATIH MUDA DOJO";
+            }
+
+            renderVocabularyReview();
+        }
+
+        function renderVocabularyReview() {
+            const listContainer = document.getElementById("vocabReviewList");
+            listContainer.innerHTML = "";
+
+            if (state.sessionHistory.length === 0) {
+                listContainer.innerHTML = `<p class="text-center text-slate-400 py-6 text-sm">Tiada rekod kosa kata untuk sesi ini.</p>`;
+                return;
+            }
+
+            state.sessionHistory.forEach(item => {
+                const isSyn = item.relation === "SYNONYM";
+                const badgeClass = isSyn
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    : "bg-rose-500/20 text-rose-300 border-rose-500/40";
+                const relationLabel = isSyn ? "SYNONYM (Seerti)" : "ANTONYM (Berlawanan)";
+
+                const card = document.createElement("div");
+                card.className = "bg-slate-950/85 border border-slate-800 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2";
+
+                const chipsHtml = item.correctList.map(word => {
+                    const wasHit = item.slicedCorrectly.includes(word);
+                    return `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold ${
+                        wasHit
+                            ? "bg-amber-500/25 text-amber-300 border border-amber-400/50"
+                            : "bg-slate-800/90 text-slate-300 border border-slate-700"
+                    }">
+                        ${wasHit ? "⚔️" : "•"} ${word}
+                    </span>`;
+                }).join(" ");
+
+                card.innerHTML = `
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-dojo text-lg font-black text-white">${item.word}</span>
+                            <span class="text-xs text-slate-400">(${item.meaning})</span>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeClass}">
+                                ${relationLabel}
+                            </span>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5 mt-2">
+                            ${chipsHtml}
+                        </div>
+                    </div>
+                `;
+                listContainer.appendChild(card);
+            });
+        }
+
+        /**
+         * ============================================================================
+         * 10. PENDENGAR ACARA ANTARA MUKA (BUTANG MOD, WARNA BILAH & MULA)
+         * ============================================================================
+         */
+        document.querySelectorAll(".mode-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll(".mode-btn").forEach(b => {
+                    b.classList.remove("active-mode", "bg-amber-500/20", "border-2", "border-amber-400", "text-amber-200");
+                    b.classList.add("bg-slate-800/70", "border", "border-slate-700", "text-slate-300");
+                });
+                btn.classList.remove("bg-slate-800/70", "border", "border-slate-700", "text-slate-300");
+                btn.classList.add("active-mode", "bg-amber-500/20", "border-2", "border-amber-400", "text-amber-200");
+                state.selectedMode = btn.dataset.mode;
+            });
+        });
+
+        document.querySelectorAll(".blade-color-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll(".blade-color-btn").forEach(b => {
+                    b.classList.remove("ring-4", "ring-white", "scale-110");
+                    b.classList.add("opacity-75");
+                });
+                btn.classList.remove("opacity-75");
+                btn.classList.add("ring-4", "ring-white", "scale-110");
+                state.bladeColor = btn.dataset.color;
+            });
+        });
+
+        document.getElementById("startBtn").addEventListener("click", startGame);
+        document.getElementById("playAgainBtn").addEventListener("click", startGame);
+        document.getElementById("quitBtn").addEventListener("click", endGame);
+        document.getElementById("backToMenuBtn").addEventListener("click", () => {
+            document.getElementById("endScreen").classList.add("hidden");
+            document.getElementById("startScreen").classList.remove("hidden");
+            state.screen = "START";
+        });
+
+        // Mulakan sensor MediaPipe & gelung animasi sebaik sahaja halaman siap dimuatkan
+        window.onload = function () {
+            setupMediaPipe();
+            requestAnimationFrame(gameLoop);
+        };
+    </script>
+</body>
+</html>
